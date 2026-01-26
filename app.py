@@ -1,5 +1,6 @@
 import os
 import telebot
+import requests
 from groq import Groq
 from collections import deque
 from flask import Flask
@@ -19,8 +20,9 @@ def run_flask():
 # --- НАСТРОЙКИ ---
 BOT_TOKEN = os.environ.get('BOT_TOKEN')
 GROQ_API_KEY = os.environ.get('GROQ_API_KEY')
-ADMIN_PASSWORD = "1234sezer1234"  # Твой новый пароль
-MY_OWN_ID = 5349904118           # Твой личный ID
+ADMIN_PASSWORD = "1234sezer1234"
+MY_OWN_ID = 5349904118
+SCREENSHOT_API_KEY = "e1786d" # Твой ключ здесь
 
 bot = telebot.TeleBot(BOT_TOKEN)
 client = Groq(api_key=GROQ_API_KEY)
@@ -37,6 +39,35 @@ MODELS = {
     "DeepSeek R1 70B": "deepseek-r1-distill-llama-70b",
     "Llama 3.1 8B": "llama-3.1-8b-instant"
 }
+
+# --- ФУНКЦИЯ СКРИНШОТА ---
+@bot.message_handler(commands=['screen'])
+def take_screenshot(message):
+    if message.chat.id not in ALLOWED_CHATS or IS_MAINTENANCE: return
+    
+    try:
+        # Берем всё, что идет после команды /screen
+        url = message.text.split(maxsplit=1)[1]
+        if not url.startswith('http'):
+            url = 'https://' + url
+    except IndexError:
+        bot.reply_to(message, "⚠️ Напиши ссылку, например: `/screen google.com`", parse_mode="Markdown")
+        return
+
+    status_msg = bot.reply_to(message, "📸 Захожу на сайт и делаю снимок...")
+
+    # Параметры: Dimension (разрешение), Device (устройство), Format (jpg/png)
+    api_url = f"https://api.screenshotmachine.com/?key={SCREENSHOT_API_KEY}&url={url}&dimension=1920x1080&format=jpg"
+    
+    try:
+        response = requests.get(api_url, timeout=20)
+        if response.status_code == 200:
+            bot.send_photo(message.chat.id, response.content, caption=f"✅ Скриншот готов: {url}")
+            bot.delete_message(message.chat.id, status_msg.message_id)
+        else:
+            bot.edit_message_text(f"❌ Ошибка API ({response.status_code}). Проверь правильность ключа или лимиты.", message.chat.id, status_msg.message_id)
+    except Exception as e:
+        bot.edit_message_text(f"❌ Ошибка: {str(e)}", message.chat.id, status_msg.message_id)
 
 # --- АДМИН-ПАНЕЛЬ ---
 @bot.message_handler(commands=['admin'])
@@ -93,7 +124,7 @@ def add_chat_to_list(message):
             bot.send_message(message.chat.id, f"✅ Чат {new_id} добавлен.")
         else:
             bot.send_message(message.chat.id, "Уже есть в списке.")
-    except: bot.send_message(message.chat.id, "Ошибка: ID должен быть числом.")
+    except: bot.send_message(message.chat.id, "Ошибка.")
 
 @bot.message_handler(func=lambda message: message.text == "🧹 Очистить всё")
 def clear_all(message):
@@ -142,19 +173,17 @@ def process_custom_limit(message):
             chat_id = message.chat.id
             chat_limits[chat_id] = new_limit
             chat_histories[chat_id] = deque(list(chat_histories.get(chat_id, [])), maxlen=new_limit)
-            bot.reply_to(message, f"✅ Лимит памяти установлен на {new_limit}")
-        else: bot.reply_to(message, "Диапазон: 0-2000.")
+            bot.reply_to(message, f"✅ Память: {new_limit}")
+        else: bot.reply_to(message, "0-2000!")
     except: bot.reply_to(message, "Ошибка.")
 
-# --- ОСНОВНАЯ ЛОГИКА ---
+# --- ЛОГИКА ИИ ---
 @bot.message_handler(func=lambda message: True)
 def handle_message(message):
     chat_id = message.chat.id
     if chat_id not in ALLOWED_CHATS: return
-    
-    # Режим тех. работ
     if IS_MAINTENANCE and message.from_user.id != MY_OWN_ID:
-        bot.reply_to(message, "🛠 Бот временно отключен на техническое обслуживание.")
+        bot.reply_to(message, "🛠 Бот на тех. обслуживании.")
         return
 
     bot_info = bot.get_me()
