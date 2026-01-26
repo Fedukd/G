@@ -17,12 +17,13 @@ def run_flask():
     port = int(os.environ.get("PORT", 8080))
     app.run(host='0.0.0.0', port=port)
 
-# --- НАСТРОЙКИ ---
+# --- НАСТРОЙКИ (Берем всё из переменных окружения) ---
 BOT_TOKEN = os.environ.get('BOT_TOKEN')
 GROQ_API_KEY = os.environ.get('GROQ_API_KEY')
+SCREENSHOT_API_KEY = os.environ.get('SCREENSHOT_API_KEY') # Теперь берется отсюда!
+
 ADMIN_PASSWORD = "1234sezer1234"
 MY_OWN_ID = 5349904118
-SCREENSHOT_API_KEY = "e1786d" # Твой ключ здесь
 
 bot = telebot.TeleBot(BOT_TOKEN)
 client = Groq(api_key=GROQ_API_KEY)
@@ -45,8 +46,11 @@ MODELS = {
 def take_screenshot(message):
     if message.chat.id not in ALLOWED_CHATS or IS_MAINTENANCE: return
     
+    if not SCREENSHOT_API_KEY:
+        bot.reply_to(message, "❌ API ключ для скриншотов не настроен в переменных окружения Render.")
+        return
+
     try:
-        # Берем всё, что идет после команды /screen
         url = message.text.split(maxsplit=1)[1]
         if not url.startswith('http'):
             url = 'https://' + url
@@ -56,7 +60,6 @@ def take_screenshot(message):
 
     status_msg = bot.reply_to(message, "📸 Захожу на сайт и делаю снимок...")
 
-    # Параметры: Dimension (разрешение), Device (устройство), Format (jpg/png)
     api_url = f"https://api.screenshotmachine.com/?key={SCREENSHOT_API_KEY}&url={url}&dimension=1920x1080&format=jpg"
     
     try:
@@ -65,7 +68,7 @@ def take_screenshot(message):
             bot.send_photo(message.chat.id, response.content, caption=f"✅ Скриншот готов: {url}")
             bot.delete_message(message.chat.id, status_msg.message_id)
         else:
-            bot.edit_message_text(f"❌ Ошибка API ({response.status_code}). Проверь правильность ключа или лимиты.", message.chat.id, status_msg.message_id)
+            bot.edit_message_text(f"❌ Ошибка API ({response.status_code}). Проверь ключ в настройках Render.", message.chat.id, status_msg.message_id)
     except Exception as e:
         bot.edit_message_text(f"❌ Ошибка: {str(e)}", message.chat.id, status_msg.message_id)
 
