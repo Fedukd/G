@@ -1,6 +1,7 @@
 import os
 import telebot
 import requests
+import hashlib
 from groq import Groq
 from collections import deque
 from flask import Flask
@@ -17,12 +18,13 @@ def run_flask():
     port = int(os.environ.get("PORT", 8080))
     app.run(host='0.0.0.0', port=port)
 
-# --- НАСТРОЙКИ (Берем всё из переменных окружения) ---
+# --- НАСТРОЙКИ (Берем всё из переменных окружения Render) ---
 BOT_TOKEN = os.environ.get('BOT_TOKEN')
 GROQ_API_KEY = os.environ.get('GROQ_API_KEY')
-SCREENSHOT_API_KEY = os.environ.get('SCREENSHOT_API_KEY') # Теперь берется отсюда!
+SCREENSHOT_API_KEY = os.environ.get('SCREENSHOT_API_KEY')
+SECRET_PHRASE = os.environ.get('SECRET_PHRASE')
+ADMIN_PASSWORD = os.environ.get('ADMIN_PASSWORD')
 
-ADMIN_PASSWORD = "1234sezer1234"
 MY_OWN_ID = 5349904118
 
 bot = telebot.TeleBot(BOT_TOKEN)
@@ -46,8 +48,8 @@ MODELS = {
 def take_screenshot(message):
     if message.chat.id not in ALLOWED_CHATS or IS_MAINTENANCE: return
     
-    if not SCREENSHOT_API_KEY:
-        bot.reply_to(message, "❌ API ключ для скриншотов не настроен в переменных окружения Render.")
+    if not SCREENSHOT_API_KEY or not SECRET_PHRASE:
+        bot.reply_to(message, "❌ Ошибка: Не настроены SCREENSHOT_API_KEY или SECRET_PHRASE на Render.")
         return
 
     try:
@@ -55,12 +57,15 @@ def take_screenshot(message):
         if not url.startswith('http'):
             url = 'https://' + url
     except IndexError:
-        bot.reply_to(message, "⚠️ Напиши ссылку, например: `/screen google.com`", parse_mode="Markdown")
+        bot.reply_to(message, "⚠️ Напиши ссылку, например: `/screen google.com`")
         return
 
-    status_msg = bot.reply_to(message, "📸 Захожу на сайт и делаю снимок...")
+    status_msg = bot.reply_to(message, "📸 Генерирую защищенный скриншот...")
 
-    api_url = f"https://api.screenshotmachine.com/?key={SCREENSHOT_API_KEY}&url={url}&dimension=1920x1080&format=jpg"
+    # Хешируем для безопасности: md5(url + SECRET_PHRASE)
+    hash_value = hashlib.md5((url + SECRET_PHRASE).encode('utf-8')).hexdigest()
+
+    api_url = f"https://api.screenshotmachine.com/?key={SCREENSHOT_API_KEY}&url={url}&dimension=1920x1080&format=jpg&hash={hash_value}"
     
     try:
         response = requests.get(api_url, timeout=20)
@@ -68,7 +73,7 @@ def take_screenshot(message):
             bot.send_photo(message.chat.id, response.content, caption=f"✅ Скриншот готов: {url}")
             bot.delete_message(message.chat.id, status_msg.message_id)
         else:
-            bot.edit_message_text(f"❌ Ошибка API ({response.status_code}). Проверь ключ в настройках Render.", message.chat.id, status_msg.message_id)
+            bot.edit_message_text(f"❌ Ошибка API ({response.status_code}). Проверь ключи на Render.", message.chat.id, status_msg.message_id)
     except Exception as e:
         bot.edit_message_text(f"❌ Ошибка: {str(e)}", message.chat.id, status_msg.message_id)
 
@@ -80,7 +85,7 @@ def admin_auth(message):
     bot.register_next_step_handler(msg, check_admin_pass)
 
 def check_admin_pass(message):
-    if message.text == ADMIN_PASSWORD:
+    if message.text == ADMIN_PASSWORD: # Сравниваем с переменной
         show_admin_menu(message.chat.id)
     else:
         bot.send_message(message.chat.id, "❌ Неверный пароль.")
