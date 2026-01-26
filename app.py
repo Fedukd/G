@@ -1,24 +1,3 @@
-from flask import Flask
-from threading import Thread
-import os
-
-app = Flask('')
-
-@app.route('/')
-def home():
-    return "I am alive"
-
-def run():
-    port = int(os.environ.get("PORT", 8080))
-    app.run(host='0.0.0.0', port=port)
-
-def keep_alive():
-    t = Thread(target=run)
-    t.start()
-
-# Запускаем веб-сервер сразу
-keep_alive()
-
 import os
 import telebot
 import requests
@@ -68,7 +47,7 @@ MODELS = {
 @bot.message_handler(commands=['screen'])
 def take_screenshot(message):
     if message.chat.id not in ALLOWED_CHATS or IS_MAINTENANCE: return
-    
+
     if not SCREENSHOT_API_KEY or not SECRET_PHRASE:
         bot.reply_to(message, "❌ Ошибка: Не настроены SCREENSHOT_API_KEY или SECRET_PHRASE на Render.")
         return
@@ -87,7 +66,7 @@ def take_screenshot(message):
     hash_value = hashlib.md5((url + SECRET_PHRASE).encode('utf-8')).hexdigest()
 
     api_url = f"https://api.screenshotmachine.com/?key={SCREENSHOT_API_KEY}&url={url}&dimension=1920x1080&format=jpg&hash={hash_value}"
-    
+
     try:
         response = requests.get(api_url, timeout=20)
         if response.status_code == 200:
@@ -225,7 +204,7 @@ def handle_message(message):
         limit = chat_limits.get(chat_id, 1000)
         model_alias = chat_models.get(chat_id, "Llama 3.3 70B")
         model_id = MODELS.get(model_alias, "llama-3.3-70b-versatile")
-        
+
         if chat_id not in chat_histories: chat_histories[chat_id] = deque(maxlen=limit)
         clean_text = message.text.replace(bot_username, "").strip() if message.text else ""
         if not clean_text: return
