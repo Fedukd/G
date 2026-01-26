@@ -78,5 +78,5 @@ def handle_message(message):
 
 if __name__ == "__main__":
     Thread(target=run_flask, daemon=True).start()
-    print("✅ Бот запущен. Характер и пол удалены. Память: 1000 сообщений.")
+    print("✅ Бот запущен.")
     bot.polling(none_stop=True)
