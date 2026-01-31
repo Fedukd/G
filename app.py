@@ -6,13 +6,12 @@ from pyrogram import Client, filters
 from pyrogram.types import InlineKeyboardMarkup, InlineKeyboardButton
 from groq import Groq
 
-# --- НАСТРОЙКИ ---
+# --- Настройки из Render ---
 API_ID = int(os.getenv("API_ID", 0))
 API_HASH = os.getenv("API_HASH", "")
 BOT_TOKEN = os.getenv("BOT_TOKEN", "")
 DATABASE_URL = os.getenv("DATABASE_URL")
 GROQ_API_KEY = os.getenv("GROQ_API_KEY")
-# Твой ID, который ты добавишь в Render
 ALLOWED_ID = int(os.getenv("MY_ID", 0)) 
 
 bot = Client("fanstat_bot", api_id=API_ID, api_hash=API_HASH, bot_token=BOT_TOKEN)
@@ -21,7 +20,7 @@ groq_client = Groq(api_key=GROQ_API_KEY)
 def get_conn():
     return psycopg2.connect(DATABASE_URL, sslmode='require')
 
-# Логируем всё (это можно оставить для всех, чтобы база росла)
+# Молча собираем сообщения в группах
 @bot.on_message(filters.group & filters.text)
 async def logger(client, message):
     if message.from_user:
@@ -33,52 +32,74 @@ async def logger(client, message):
         cur.close()
         conn.close()
 
-# А вот команды и кнопки — ТОЛЬКО ДЛЯ ТЕБЯ
-@bot.on_message(filters.command("start") & filters.user(ALLOWED_ID))
-async def start(client, message):
-    await message.reply("Доступ разрешен. Твой личный Телелог готов:", reply_markup=main_kb())
+# Твой личный поиск
+@bot.on_message(filters.private & filters.user(ALLOWED_ID) & filters.text)
+async def search_handler(client, message):
+    query = message.text.strip()
+    
+    if query.isdigit():
+        target_id = int(query)
+        try:
+            # Тянем инфу напрямую из ТГ
+            user = await client.get_users(target_id)
+            name = f"{user.first_name or ''} {user.last_name or ''}".strip()
+            username = f"@{user.username}" if user.username else "нет юзернейма"
+        except Exception:
+            name, username = "Неизвестно", "не найден в контактах"
+
+        conn = get_conn()
+        cur = conn.cursor()
+        cur.execute("SELECT COUNT(*) FROM messages WHERE user_id = %s", (target_id,))
+        count = cur.fetchone()[0]
+        cur.close()
+        conn.close()
+
+        res = f"🔍 **Результат по ID {target_id}:**\n"
+        res += f"👤 Имя: {name}\n"
+        res += f"🔗 Юзер: {username}\n"
+        res += f"✉️ Сообщений в базе: `{count}`"
+        
+        await message.reply(res, reply_markup=main_kb(target_id))
+    elif query == "/start":
+        await message.reply("Кидай ID чела — выверну его логи наизнанку.", reply_markup=main_kb(ALLOWED_ID))
+
+def main_kb(tid):
+    return InlineKeyboardMarkup([
+        [InlineKeyboardButton("🧠 Анализ личности (Groq)", callback_data=f"ai_{tid}")],
+        [InlineKeyboardButton("📊 Топ слов", callback_data=f"words_{tid}")]
+    ])
 
 @bot.on_callback_query()
 async def callbacks(client, callback_query):
-    # Проверка: если нажал не ты — бот просто проигнорит или пошлет
-    if callback_query.from_user.id != ALLOWED_ID:
-        await callback_query.answer("Доступ закрыт. Это личный бот.", show_alert=True)
-        return
-
-    uid = callback_query.from_user.id
+    if callback_query.from_user.id != ALLOWED_ID: return
+    
+    action, tid = callback_query.data.split("_")
     conn = get_conn()
     cur = conn.cursor()
 
-    if callback_query.data == "words":
-        cur.execute("SELECT text FROM messages WHERE user_id = %s LIMIT 5000", (uid,))
-        rows = cur.fetchall()
-        text = " ".join([r[0] for r in rows if r[0]]).lower()
-        words = re.findall(r'[а-яёa-z]{3,}', text)
-        top = Counter(words).most_common(10)
-        res = "**Топ слов:**\n" + "\n".join([f"— {c} {w}" for w, c in top])
-        await callback_query.edit_message_text(res, reply_markup=main_kb())
+    if action == "words":
+        cur.execute("SELECT text FROM messages WHERE user_id = %s LIMIT 3000", (tid,))
+        words = re.findall(r'[а-яёa-z]{3,}', " ".join([r[0] for r in cur.fetchall()]).lower())
+        top = "\n".join([f"— {c} {w}" for w, c in Counter(words).most_common(10)])
+        await callback_query.edit_message_text(f"🗣 **Слова юзера {tid}:**\n{top or 'Мало данных'}", reply_markup=main_kb(tid))
 
-    elif callback_query.data == "ai":
-        await callback_query.answer("Groq думает...")
-        cur.execute("SELECT text FROM messages WHERE user_id = %s ORDER BY id DESC LIMIT 50", (uid,))
-        recent = [r[0] for r in cur.fetchall()]
+    elif action == "ai":
+        await callback_query.answer("Groq анализирует...")
+        cur.execute("SELECT text FROM messages WHERE user_id = %s ORDER BY id DESC LIMIT 50", (tid,))
+        logs = "\n".join([r[0] for r in cur.fetchall()])
         
+        if not logs:
+            return await callback_query.edit_message_text("❌ Нет сообщений для анализа.", reply_markup=main_kb(tid))
+
         chat = groq_client.chat.completions.create(
             model="llama-3.3-70b-versatile",
-            messages=[{"role": "system", "content": "Ты дерзкий аналитик логов. Опиши психотип юзера по сообщениям."},
-                      {"role": "user", "content": "\n".join(recent)}]
+            messages=[{"role": "system", "content": "Ты жесткий психолог-аналитик. Разбери человека по его сообщениям, не церемонься."},
+                      {"role": "user", "content": logs}]
         )
-        await callback_query.edit_message_text(f"**Анализ ИИ:**\n{chat.choices[0].message.content}", reply_markup=main_kb())
+        await callback_query.edit_message_text(f"🧠 **Вердикт ИИ:**\n\n{chat.choices[0].message.content}", reply_markup=main_kb(tid))
 
     cur.close()
     conn.close()
-
-def main_kb():
-    return InlineKeyboardMarkup([
-        [InlineKeyboardButton("📊 Профиль", callback_data="st"), InlineKeyboardButton("🔔 Следить", callback_data="tr")],
-        [InlineKeyboardButton("💬 Сообщения", callback_data="msg"), InlineKeyboardButton("🔎 Анализ", callback_data="ai")],
-        [InlineKeyboardButton("🗣 Частота слов", callback_data="words")]
-    ])
 
 if __name__ == "__main__":
     bot.run()
